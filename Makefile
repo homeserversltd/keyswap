@@ -1,6 +1,6 @@
 CC = gcc
-CFLAGS = -Wall -Wextra -g -std=c11
-LDFLAGS = -levdev -ljansson -lm
+CFLAGS = -Wall -Wextra -g -std=c11 -D_POSIX_C_SOURCE=200809L $(shell pkg-config --cflags libevdev jansson)
+LDFLAGS = $(shell pkg-config --libs libevdev jansson) -lm
 TARGET = keyswap
 
 SOURCES = keyswap.c \

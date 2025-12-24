@@ -17,7 +17,8 @@ typedef struct {
 // Device configuration structure
 typedef struct {
     char uuid[64];
-    char name_match[128];
+    char identifier[64];     // Device identifier: vendor:product (e.g., "046d:c08b") or unique string
+    char name_match[128];    // Device name pattern (fallback if no identifier)
     remap_rule_t *remaps;
     int remap_count;
 } device_config_t;

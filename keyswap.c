@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <errno.h>
+#include <getopt.h>
 #include <libevdev/libevdev.h>
 #include <libevdev/libevdev-uinput.h>
 #include "config-loader.h"
@@ -61,12 +62,62 @@ void cleanup(void) {
     }
 }
 
+void print_usage(const char *program_name) {
+    printf("Usage: %s [OPTIONS] [CONFIG_FILE]\n", program_name);
+    printf("\n");
+    printf("Options:\n");
+    printf("  -l, --list          List all available input devices\n");
+    printf("  -r, --run FILE      Run key mapper with specified config file (full path)\n");
+    printf("  -h, --help          Show this help message\n");
+    printf("\n");
+    printf("Arguments:\n");
+    printf("  CONFIG_FILE         Path to configuration file (default: index.json)\n");
+    printf("                      Note: Use --run/-r to explicitly specify config file\n");
+    printf("\n");
+}
+
 int main(int argc, char *argv[]) {
     const char *config_path = "index.json";
+    int list_devices = 0;
+    int run_specified = 0;
     
     // Parse command line arguments
-    if (argc > 1) {
-        config_path = argv[1];
+    static struct option long_options[] = {
+        {"list", no_argument, 0, 'l'},
+        {"run", required_argument, 0, 'r'},
+        {"help", no_argument, 0, 'h'},
+        {0, 0, 0, 0}
+    };
+    
+    int opt;
+    int option_index = 0;
+    
+    while ((opt = getopt_long(argc, argv, "lr:h", long_options, &option_index)) != -1) {
+        switch (opt) {
+            case 'l':
+                list_devices = 1;
+                break;
+            case 'r':
+                config_path = optarg;
+                run_specified = 1;
+                break;
+            case 'h':
+                print_usage(argv[0]);
+                return 0;
+            default:
+                print_usage(argv[0]);
+                return 1;
+        }
+    }
+    
+    // Handle non-option arguments (config file path) - only if --run wasn't specified
+    if (!run_specified && optind < argc) {
+        config_path = argv[optind];
+    }
+    
+    // Handle --list command
+    if (list_devices) {
+        return list_all_devices() == 0 ? 0 : 1;
     }
     
     // Setup signal handlers
@@ -107,11 +158,18 @@ int main(int argc, char *argv[]) {
         device_config_t *device_cfg = &g_config->devices[i];
         char device_path[256];
         
-        printf("\nProcessing device: %s (match: %s)\n", device_cfg->uuid, device_cfg->name_match);
+        printf("\nProcessing device: %s", device_cfg->uuid);
+        if (strlen(device_cfg->identifier) > 0) {
+            printf(" (identifier: %s)", device_cfg->identifier);
+        } else if (strlen(device_cfg->name_match) > 0) {
+            printf(" (name: %s)", device_cfg->name_match);
+        }
+        printf("\n");
         
-        // Find matching device
-        if (find_matching_device(device_cfg->name_match, device_path, sizeof(device_path)) != 0) {
-            fprintf(stderr, "WARNING: Could not find device matching '%s'\n", device_cfg->name_match);
+        // Find matching device (prefers identifier, falls back to name_match)
+        if (find_matching_device(device_cfg->identifier, device_cfg->name_match, device_path, sizeof(device_path)) != 0) {
+            const char *match_str = strlen(device_cfg->identifier) > 0 ? device_cfg->identifier : device_cfg->name_match;
+            fprintf(stderr, "WARNING: Could not find device matching '%s'\n", match_str);
             continue;
         }
         

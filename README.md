@@ -26,10 +26,31 @@ Dependencies:
 ### Basic Usage
 
 ```bash
-sudo ./keyswap [config_file]
+sudo ./keyswap [OPTIONS] [config_file]
 ```
 
 If no config file is specified, it defaults to `index.json` in the current directory.
+
+### Command Line Options
+
+- `-l, --list` - List all available input devices and exit
+- `-h, --help` - Show help message and exit
+
+### Listing Available Devices
+
+To discover which devices are available for remapping:
+
+```bash
+./keyswap --list
+```
+
+or
+
+```bash
+./keyswap -l
+```
+
+This will display all accessible input devices with their paths, names, physical locations, and device types. Use the device name to create a `name_match` pattern in your configuration.
 
 ### Configuration
 

@@ -154,12 +154,31 @@ config_t* load_config(const char *config_path) {
                     strncpy(device->uuid, json_string_value(uuid_json), sizeof(device->uuid) - 1);
                 }
                 
-                // Get name_match
+                // Get identifier (vendor:product or unique string) or name_match (fallback)
+                json_t *identifier_json = json_object_get(device_json, "identifier");
+                if (!identifier_json) {
+                    // Try legacy "unique" field for backwards compatibility
+                    identifier_json = json_object_get(device_json, "unique");
+                }
+                if (identifier_json && json_is_string(identifier_json)) {
+                    strncpy(device->identifier, json_string_value(identifier_json), sizeof(device->identifier) - 1);
+                    device->identifier[sizeof(device->identifier) - 1] = '\0';
+                } else {
+                    device->identifier[0] = '\0';
+                }
+                
+                // Get name_match (fallback if no identifier)
                 json_t *name_match_json = json_object_get(device_json, "name_match");
                 if (name_match_json && json_is_string(name_match_json)) {
                     strncpy(device->name_match, json_string_value(name_match_json), sizeof(device->name_match) - 1);
+                    device->name_match[sizeof(device->name_match) - 1] = '\0';
                 } else {
-                    fprintf(stderr, "WARNING: Device %zu missing name_match\n", i);
+                    device->name_match[0] = '\0';
+                }
+                
+                // Must have either identifier or name_match
+                if (strlen(device->identifier) == 0 && strlen(device->name_match) == 0) {
+                    fprintf(stderr, "WARNING: Device %zu missing both 'identifier' and 'name_match'\n", i);
                     continue;
                 }
                 
