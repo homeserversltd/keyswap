@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "schema_version": "1.0.0",
+    "name": "keyswap",
+    "description": "Generic input remapping tool"
+  },
+  "paths": {
+    "config_file": "${HOME}/.config/keyswap/config.json",
+    "debug_log": "/tmp/keyswap-debug.log"
+  },
+  "config": {
+    "debug": false,
+    "devices": [
+      {
+        "uuid": "kensington-expert-mouse",
+        "name_match": "Kensington",
+        "remaps": [
+          {
+            "source": "back",
+            "target": "enter",
+            "description": "Back button → Enter key"
+          }
+        ]
+      }
+    ]
+  }
+}
