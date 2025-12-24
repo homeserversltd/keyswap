@@ -67,6 +67,9 @@ void print_usage(const char *program_name) {
     printf("\n");
     printf("Options:\n");
     printf("  -l, --list          List all available input devices\n");
+    printf("  -L, --listen [ID]   Listen/monitor mode: display events from device(s)\n");
+    printf("                      If ID (vendor:product hex) provided, monitor that device\n");
+    printf("                      If no ID, monitor all devices from config file\n");
     printf("  -r, --run FILE      Run key mapper with specified config file (full path)\n");
     printf("  -h, --help          Show this help message\n");
     printf("\n");
@@ -74,16 +77,23 @@ void print_usage(const char *program_name) {
     printf("  CONFIG_FILE         Path to configuration file (default: index.json)\n");
     printf("                      Note: Use --run/-r to explicitly specify config file\n");
     printf("\n");
+    printf("Examples:\n");
+    printf("  %s --listen           # Monitor all devices from config\n", program_name);
+    printf("  %s --listen 046d:c08b # Monitor specific device by vendor:product\n", program_name);
+    printf("\n");
 }
 
 int main(int argc, char *argv[]) {
     const char *config_path = "index.json";
     int list_devices = 0;
+    int listen_mode = 0;
+    const char *listen_identifier = NULL;
     int run_specified = 0;
     
     // Parse command line arguments
     static struct option long_options[] = {
         {"list", no_argument, 0, 'l'},
+        {"listen", optional_argument, 0, 'L'},
         {"run", required_argument, 0, 'r'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
@@ -92,10 +102,16 @@ int main(int argc, char *argv[]) {
     int opt;
     int option_index = 0;
     
-    while ((opt = getopt_long(argc, argv, "lr:h", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "lL::r:h", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'l':
                 list_devices = 1;
+                break;
+            case 'L':
+                listen_mode = 1;
+                if (optarg) {
+                    listen_identifier = optarg;
+                }
                 break;
             case 'r':
                 config_path = optarg;
@@ -110,14 +126,79 @@ int main(int argc, char *argv[]) {
         }
     }
     
-    // Handle non-option arguments (config file path) - only if --run wasn't specified
-    if (!run_specified && optind < argc) {
+    // Handle --listen with identifier as non-option argument (--listen 046d:c08b format)
+    if (listen_mode && !listen_identifier && optind < argc) {
+        listen_identifier = argv[optind];
+        optind++;
+    }
+    
+    // Handle non-option arguments (config file path) - only if --run wasn't specified and not in listen mode
+    if (!run_specified && !listen_mode && optind < argc) {
         config_path = argv[optind];
+    }
+    
+    // Check for root privileges (required for device access)
+    if (geteuid() != 0) {
+        fprintf(stderr, "WARNING: Not running as root. Device access may be limited.\n");
+        fprintf(stderr, "Some devices may not be accessible. Consider running with sudo.\n\n");
     }
     
     // Handle --list command
     if (list_devices) {
         return list_all_devices() == 0 ? 0 : 1;
+    }
+    
+    // Handle --listen command
+    if (listen_mode) {
+        signal(SIGINT, signal_handler);
+        
+        if (listen_identifier) {
+            // Monitor specific device by identifier
+            char device_path[256];
+            if (find_matching_device(listen_identifier, "", device_path, sizeof(device_path)) != 0) {
+                fprintf(stderr, "ERROR: Could not find device with identifier '%s'\n", listen_identifier);
+                fprintf(stderr, "Use --list to see available devices\n");
+                return 1;
+            }
+            
+            return listen_device(device_path, &running) == 0 ? 0 : 1;
+        } else {
+            // Monitor all devices from config file
+            config_t *config = load_config(config_path);
+            if (!config) {
+                fprintf(stderr, "ERROR: Failed to load configuration from %s\n", config_path);
+                fprintf(stderr, "Use --listen <identifier> to monitor a specific device\n");
+                return 1;
+            }
+            
+            if (config->device_count == 0) {
+                fprintf(stderr, "ERROR: No devices configured in %s\n", config_path);
+                fprintf(stderr, "Use --listen <identifier> to monitor a specific device\n");
+                config_free(config);
+                return 1;
+            }
+            
+            // For now, monitor the first device (multi-device monitoring would require select/poll)
+            // In the future, we could enhance this to monitor all devices
+            if (config->device_count > 1) {
+                printf("Note: Multiple devices in config. Monitoring first device only.\n");
+                printf("Use --listen <identifier> to monitor a specific device.\n\n");
+            }
+            
+            device_config_t *device_cfg = &config->devices[0];
+            char device_path[256];
+            
+            const char *match_str = strlen(device_cfg->identifier) > 0 ? device_cfg->identifier : device_cfg->name_match;
+            if (find_matching_device(device_cfg->identifier, device_cfg->name_match, device_path, sizeof(device_path)) != 0) {
+                fprintf(stderr, "ERROR: Could not find device matching '%s'\n", match_str);
+                config_free(config);
+                return 1;
+            }
+            
+            int ret = listen_device(device_path, &running);
+            config_free(config);
+            return ret == 0 ? 0 : 1;
+        }
     }
     
     // Setup signal handlers

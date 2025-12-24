@@ -28,4 +28,10 @@ void inject_event(struct libevdev_uinput *uinput, int type, int code, int value)
 // Forward an event to virtual mouse device
 void forward_event(struct libevdev_uinput *mouse, struct input_event *ev);
 
+// Listen/monitor mode: Open device and display events in real-time
+// Does NOT grab device (device continues to work normally)
+// Returns 0 on success, -1 on error
+// running_ptr points to flag that controls loop (set to 0 to stop)
+int listen_device(const char *device_path, int *running_ptr);
+
 #endif // EVENT_PROCESSOR_H

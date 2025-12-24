@@ -212,3 +212,101 @@ int process_events(struct libevdev *dev, device_config_t *device_cfg, config_t *
     
     return 0;
 }
+
+int listen_device(const char *device_path, int *running_ptr) {
+    if (!device_path) return -1;
+    
+    int fd = open(device_path, O_RDONLY);
+    if (fd < 0) {
+        fprintf(stderr, "ERROR: Failed to open device %s: %s\n", device_path, strerror(errno));
+        return -1;
+    }
+    
+    struct libevdev *dev = NULL;
+    int rc = libevdev_new_from_fd(fd, &dev);
+    if (rc < 0) {
+        fprintf(stderr, "ERROR: Failed to create libevdev device: %s\n", strerror(-rc));
+        close(fd);
+        return -1;
+    }
+    
+    const char *device_name = libevdev_get_name(dev);
+    int vendor_id = libevdev_get_id_vendor(dev);
+    int product_id = libevdev_get_id_product(dev);
+    const char *device_uniq = libevdev_get_uniq(dev);
+    
+    // Display device info
+    printf("\n=== Listening to device ===\n");
+    printf("Path: %s\n", device_path);
+    printf("Name: %s\n", device_name ? device_name : "unknown");
+    if (vendor_id > 0 && product_id > 0) {
+        printf("Identifier: %04x:%04x\n", vendor_id, product_id);
+    } else if (device_uniq && strlen(device_uniq) > 0) {
+        printf("Identifier: %s\n", device_uniq);
+    }
+    printf("\nPress buttons/keys on the device to see events...\n");
+    printf("Press Ctrl+C to stop\n\n");
+    
+    // Note: We do NOT grab the device - it continues to work normally
+    // Events will be visible both here and to other applications
+    
+    struct input_event ev;
+    
+    while (running_ptr == NULL || *running_ptr) {
+        rc = libevdev_next_event(dev, LIBEVDEV_READ_FLAG_NORMAL, &ev);
+        
+        if (rc == LIBEVDEV_READ_STATUS_SUCCESS) {
+            // Skip SYN events (they're just synchronization, not interesting)
+            if (ev.type == EV_SYN) {
+                continue;
+            }
+            
+            // Get canonical name for code if available
+            const char *canonical_name = NULL;
+            if (ev.type == EV_KEY) {
+                canonical_name = get_canonical_name(ev.code, ev.type);
+            }
+            
+            // Format event display
+            printf("[%s] ", get_event_type_name(ev.type));
+            
+            if (canonical_name) {
+                printf("code=%s(%d)", canonical_name, ev.code);
+            } else {
+                printf("code=%d", ev.code);
+            }
+            
+            printf(" value=%d", ev.value);
+            
+            // Add helpful state description for key events
+            if (ev.type == EV_KEY) {
+                if (ev.value == 1) {
+                    printf(" [PRESSED]");
+                } else if (ev.value == 0) {
+                    printf(" [RELEASED]");
+                } else if (ev.value == 2) {
+                    printf(" [REPEAT]");
+                }
+            }
+            
+            printf("\n");
+            fflush(stdout);
+        } else if (rc == LIBEVDEV_READ_STATUS_SYNC) {
+            // Handle sync events - skip them (not interesting for listen mode)
+            while (libevdev_next_event(dev, LIBEVDEV_READ_FLAG_SYNC, &ev) == LIBEVDEV_READ_STATUS_SUCCESS) {
+                // Skip sync events
+            }
+        } else if (rc == -EAGAIN) {
+            // No event available, continue
+            continue;
+        } else {
+            fprintf(stderr, "ERROR: Failed to read event: %s\n", strerror(-rc));
+            break;
+        }
+    }
+    
+    libevdev_free(dev);
+    close(fd);
+    
+    return 0;
+}
