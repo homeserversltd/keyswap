@@ -244,11 +244,67 @@ int listen_device(const char *device_path, int *running_ptr) {
     } else if (device_uniq && strlen(device_uniq) > 0) {
         printf("Identifier: %s\n", device_uniq);
     }
+    printf("\n");
+    
+    // Create a virtual uinput device to forward events to (so device still works)
+    struct libevdev *uinput_dev = libevdev_new();
+    libevdev_set_name(uinput_dev, "keyswap-listen-forward");
+    
+    // Copy all capabilities from original device
+    const struct input_absinfo *absinfo;
+    unsigned int code;
+    
+    // Copy EV_KEY
+    if (libevdev_has_event_type(dev, EV_KEY)) {
+        libevdev_enable_event_type(uinput_dev, EV_KEY);
+        for (code = 0; code < KEY_MAX; code++) {
+            if (libevdev_has_event_code(dev, EV_KEY, code)) {
+                libevdev_enable_event_code(uinput_dev, EV_KEY, code, NULL);
+            }
+        }
+    }
+    
+    // Copy EV_REL
+    if (libevdev_has_event_type(dev, EV_REL)) {
+        libevdev_enable_event_type(uinput_dev, EV_REL);
+        for (code = 0; code < REL_MAX; code++) {
+            if (libevdev_has_event_code(dev, EV_REL, code)) {
+                libevdev_enable_event_code(uinput_dev, EV_REL, code, NULL);
+            }
+        }
+    }
+    
+    // Copy EV_ABS
+    if (libevdev_has_event_type(dev, EV_ABS)) {
+        libevdev_enable_event_type(uinput_dev, EV_ABS);
+        for (code = 0; code < ABS_MAX; code++) {
+            if (libevdev_has_event_code(dev, EV_ABS, code)) {
+                absinfo = libevdev_get_abs_info(dev, code);
+                libevdev_enable_event_code(uinput_dev, EV_ABS, code, absinfo);
+            }
+        }
+    }
+    
+    struct libevdev_uinput *uinput = NULL;
+    rc = libevdev_uinput_create_from_device(uinput_dev, LIBEVDEV_UINPUT_OPEN_MANAGED, &uinput);
+    if (rc < 0) {
+        fprintf(stderr, "WARNING: Failed to create virtual device for forwarding: %s\n", strerror(-rc));
+        fprintf(stderr, "Events will be displayed but may not work normally\n");
+        uinput = NULL;
+    }
+    libevdev_free(uinput_dev);
+    
+    // Grab device exclusively so we can read events
+    rc = libevdev_grab(dev, LIBEVDEV_GRAB);
+    if (rc < 0) {
+        fprintf(stderr, "WARNING: Could not grab device: %s\n", strerror(-rc));
+        fprintf(stderr, "Events may not be visible if another process is using the device\n");
+    } else {
+        printf("Device grabbed - events will be forwarded so device continues to work\n");
+    }
+    
     printf("\nPress buttons/keys on the device to see events...\n");
     printf("Press Ctrl+C to stop\n\n");
-    
-    // Note: We do NOT grab the device - it continues to work normally
-    // Events will be visible both here and to other applications
     
     struct input_event ev;
     
@@ -256,6 +312,12 @@ int listen_device(const char *device_path, int *running_ptr) {
         rc = libevdev_next_event(dev, LIBEVDEV_READ_FLAG_NORMAL, &ev);
         
         if (rc == LIBEVDEV_READ_STATUS_SUCCESS) {
+            // Forward event to virtual device (so it still works)
+            if (uinput) {
+                libevdev_uinput_write_event(uinput, ev.type, ev.code, ev.value);
+                libevdev_uinput_write_event(uinput, EV_SYN, SYN_REPORT, 0);
+            }
+            
             // Skip SYN events (they're just synchronization, not interesting)
             if (ev.type == EV_SYN) {
                 continue;
@@ -292,9 +354,12 @@ int listen_device(const char *device_path, int *running_ptr) {
             printf("\n");
             fflush(stdout);
         } else if (rc == LIBEVDEV_READ_STATUS_SYNC) {
-            // Handle sync events - skip them (not interesting for listen mode)
+            // Handle sync events - forward them and skip display
             while (libevdev_next_event(dev, LIBEVDEV_READ_FLAG_SYNC, &ev) == LIBEVDEV_READ_STATUS_SUCCESS) {
-                // Skip sync events
+                if (uinput) {
+                    libevdev_uinput_write_event(uinput, ev.type, ev.code, ev.value);
+                    libevdev_uinput_write_event(uinput, EV_SYN, SYN_REPORT, 0);
+                }
             }
         } else if (rc == -EAGAIN) {
             // No event available, continue
@@ -305,6 +370,12 @@ int listen_device(const char *device_path, int *running_ptr) {
         }
     }
     
+    // Ungrab device
+    libevdev_grab(dev, LIBEVDEV_UNGRAB);
+    
+    if (uinput) {
+        libevdev_uinput_destroy(uinput);
+    }
     libevdev_free(dev);
     close(fd);
     

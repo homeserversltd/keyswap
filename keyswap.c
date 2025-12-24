@@ -68,7 +68,8 @@ void print_usage(const char *program_name) {
     printf("Options:\n");
     printf("  -l, --list          List all available input devices\n");
     printf("  -L, --listen [ID]   Listen/monitor mode: display events from device(s)\n");
-    printf("                      If ID (vendor:product hex) provided, monitor that device\n");
+    printf("                      ID can be vendor:product hex (e.g., 058f:9410) or\n");
+    printf("                      event path (e.g., /dev/input/event8)\n");
     printf("                      If no ID, monitor all devices from config file\n");
     printf("  -r, --run FILE      Run key mapper with specified config file (full path)\n");
     printf("  -h, --help          Show this help message\n");
@@ -78,8 +79,9 @@ void print_usage(const char *program_name) {
     printf("                      Note: Use --run/-r to explicitly specify config file\n");
     printf("\n");
     printf("Examples:\n");
-    printf("  %s --listen           # Monitor all devices from config\n", program_name);
-    printf("  %s --listen 046d:c08b # Monitor specific device by vendor:product\n", program_name);
+    printf("  %s --listen              # Monitor all devices from config\n", program_name);
+    printf("  %s --listen 046d:c08b    # Monitor device by vendor:product\n", program_name);
+    printf("  %s --listen /dev/input/event8  # Monitor specific event path\n", program_name);
     printf("\n");
 }
 
@@ -153,12 +155,37 @@ int main(int argc, char *argv[]) {
         signal(SIGINT, signal_handler);
         
         if (listen_identifier) {
-            // Monitor specific device by identifier
+            // Monitor specific device by identifier or event path
             char device_path[256];
-            if (find_matching_device(listen_identifier, "", device_path, sizeof(device_path)) != 0) {
-                fprintf(stderr, "ERROR: Could not find device with identifier '%s'\n", listen_identifier);
-                fprintf(stderr, "Use --list to see available devices\n");
-                return 1;
+            
+            // Check if identifier is actually an event path
+            if (strncmp(listen_identifier, "/dev/input/event", 16) == 0) {
+                // User provided event path directly
+                strncpy(device_path, listen_identifier, sizeof(device_path) - 1);
+                device_path[sizeof(device_path) - 1] = '\0';
+            } else {
+                // Check if multiple devices match this identifier
+                int match_count = count_matching_devices(listen_identifier, "");
+                if (match_count < 0) {
+                    fprintf(stderr, "ERROR: Could not scan for devices\n");
+                    return 1;
+                } else if (match_count == 0) {
+                    fprintf(stderr, "ERROR: Could not find device with identifier '%s'\n", listen_identifier);
+                    fprintf(stderr, "Use --list to see available devices\n");
+                    return 1;
+                } else if (match_count > 1) {
+                    fprintf(stderr, "ERROR: Multiple devices match identifier '%s' (%d devices found)\n", listen_identifier, match_count);
+                    fprintf(stderr, "Use --list to see all matching devices and specify the full path\n");
+                    fprintf(stderr, "Example: --listen /dev/input/event8\n");
+                    return 1;
+                }
+                
+                // Exactly one match, proceed
+                if (find_matching_device(listen_identifier, "", device_path, sizeof(device_path)) != 0) {
+                    fprintf(stderr, "ERROR: Could not find device with identifier '%s'\n", listen_identifier);
+                    fprintf(stderr, "Use --list to see available devices\n");
+                    return 1;
+                }
             }
             
             return listen_device(device_path, &running) == 0 ? 0 : 1;

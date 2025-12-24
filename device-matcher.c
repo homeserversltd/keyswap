@@ -118,6 +118,79 @@ int find_matching_device(const char *identifier, const char *name_match, char *d
     return -1;
 }
 
+int count_matching_devices(const char *identifier, const char *name_match) {
+    if ((!identifier || strlen(identifier) == 0) && (!name_match || strlen(name_match) == 0)) {
+        return -1;
+    }
+    
+    glob_t glob_result;
+    memset(&glob_result, 0, sizeof(glob_result));
+    
+    // Find all /dev/input/event* devices
+    int glob_ret = glob("/dev/input/event*", GLOB_NOSORT, NULL, &glob_result);
+    if (glob_ret != 0) {
+        return -1;
+    }
+    
+    int match_count = 0;
+    
+    for (size_t i = 0; i < glob_result.gl_pathc; i++) {
+        const char *event_path = glob_result.gl_pathv[i];
+        
+        // Try to open device
+        int fd = open(event_path, O_RDONLY);
+        if (fd < 0) continue;
+        
+        struct libevdev *dev = NULL;
+        int rc = libevdev_new_from_fd(fd, &dev);
+        if (rc < 0) {
+            close(fd);
+            continue;
+        }
+        
+        int is_match = 0;
+        
+        // Try to match by identifier first (vendor:product or unique)
+        if (identifier && strlen(identifier) > 0) {
+            int vendor_id = libevdev_get_id_vendor(dev);
+            int product_id = libevdev_get_id_product(dev);
+            const char *device_uniq = libevdev_get_uniq(dev);
+            
+            // Check vendor:product format (e.g., "046d:c08b")
+            if (vendor_id > 0 && product_id > 0) {
+                char vendor_product[64];
+                snprintf(vendor_product, sizeof(vendor_product), "%04x:%04x", vendor_id, product_id);
+                if (strcmp(vendor_product, identifier) == 0) {
+                    is_match = 1;
+                }
+            }
+            
+            // Check unique identifier
+            if (!is_match && device_uniq && strlen(device_uniq) > 0 && strcmp(device_uniq, identifier) == 0) {
+                is_match = 1;
+            }
+        }
+        
+        // Fallback to name_match
+        if (!is_match && name_match && strlen(name_match) > 0) {
+            const char *device_name = libevdev_get_name(dev);
+            if (device_name && strcasestr(device_name, name_match)) {
+                is_match = 1;
+            }
+        }
+        
+        if (is_match) {
+            match_count++;
+        }
+        
+        libevdev_free(dev);
+        close(fd);
+    }
+    
+    globfree(&glob_result);
+    return match_count;
+}
+
 device_config_t* get_device_config(config_t *config, const char *device_name) {
     if (!config || !device_name) return NULL;
     
@@ -170,6 +243,7 @@ static int should_filter_device(const char *device_name, const char *device_phys
 typedef struct {
     char name[256];
     char identifier[64];  // vendor:product or unique, whichever is available
+    char event_path[64];  // /dev/input/event* path
     int has_identifier;
 } device_info_t;
 
@@ -247,6 +321,10 @@ int list_all_devices(void) {
             strncpy(devices[device_count].name, device_name, sizeof(devices[device_count].name) - 1);
             devices[device_count].name[sizeof(devices[device_count].name) - 1] = '\0';
             
+            // Store event path
+            strncpy(devices[device_count].event_path, event_path, sizeof(devices[device_count].event_path) - 1);
+            devices[device_count].event_path[sizeof(devices[device_count].event_path) - 1] = '\0';
+            
             // Get vendor/product IDs (permanent identifier for USB devices)
             int vendor_id = libevdev_get_id_vendor(dev);
             int product_id = libevdev_get_id_product(dev);
@@ -302,11 +380,12 @@ int list_all_devices(void) {
             printf("%s\n", devices[i].name);
         }
         
-        // Display identifier (vendor:product or unique)
+        // Display event path and identifier (vendor:product or unique)
+        printf("  %s", devices[i].event_path);
         if (devices[i].has_identifier) {
-            printf("  [%s]\n", devices[i].identifier);
+            printf(" [%s]\n", devices[i].identifier);
         } else {
-            printf("  [no identifier available]\n");
+            printf(" [no identifier available]\n");
         }
     }
     
